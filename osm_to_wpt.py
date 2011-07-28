@@ -14,14 +14,13 @@
 #import gdalconst
 
 # Скрипт для конвертации точек из OSM в wpt-файл.
-# Строка запуска: osm_to_wpt.py имя_входного_файла.shp имя выходного файла
+
 # Массив name_types содержит соответствие name и иконки в Ozi (пока для Garmin)
 # Массив ignore_types содержит name, которые не должны попадать в выходной файл.
-# Лучше ли для игнорирования использовать SetAttributeFilter пока не решил.
 
-import sys, os.path
-
+import sys, os.path, argparse
 import osgeo.ogr as ogr
+
 type_notfound = 0
 poi_passed = 0
 total_pocessed = 1
@@ -45,8 +44,6 @@ name_types = [['fuel', 25], ['traffic_signals', 146], ['post_office', 44], ['ban
 			  ['marketplace', 55], ['shop', 55], ['toilets', 48], ['car_repair', 10], ['hospital', 36],['clinic', 36], ['doctors', 36],
 		['ford', 166], ['waste_basket', 148], ['waste_disposal', 148], ['ferry_terminal', 167]]
 
-
-
 # имена типов, которые не попадут в выходной файл
 ignore_types = ['bus_stop', 'place_of_worship', 'school', 'library', 'street_lamp', 'university', 'courthouse', 'bench', 'bus_station', 'fire_station', 'kindergarten',\
 				'bicycle_parking', 'turning_circle', 'public_building', 'cinema', 'steps', 'incline', 'platform', 'embassy', 'townhall', 'post_box', 'theatre',
@@ -59,7 +56,20 @@ class not_found_stat:
 		self.count = 1
 	count = 0				# Количество совпадений
 	name = ''				# Имя типа
-	
+
+# Проверка на присутствие необходимых файлов
+def check_input_files(in_path, base_filename):
+
+	isError = False
+	file_ext = ['.shp', '.shp', '.dbf']
+
+	for file in file_ext:
+		filename = os.path.join( os.path.dirname(in_path), base_filename + file );
+		if not os.access(filename, os.R_OK):
+			print "Not access to file: " + filename
+			isError = True
+	return isError
+
 # Перекодировка из  utf-8 в win1251
 def utf8_to_win(utf8):
 	s_uni = utf8.decode('utf8')
@@ -71,10 +81,6 @@ def utf8_to_win(utf8):
 		return utf8
 #	return s_cp1251
 #	return utf8
-
-def usage():
-	print "Usage: osm_to_wpt.py input_shapefile output_wptfile"
-	sys.exit( 0 )
 
 # Меняем текстовый тип на цифру для Garmin
 def get_type(name, osmId):
@@ -104,6 +110,7 @@ def get_type(name, osmId):
 		not_found_list.append(new_item)
 	return '0'
 
+# Проверка на игнорироваание типа.
 def is_ignore(name):
 	global poi_ignored
 	for item in ignore_types:
@@ -114,22 +121,35 @@ def is_ignore(name):
 
 if __name__ == '__main__':
 
-	counter = 1				# счетчик строк wpt-файла
+	parser = argparse.ArgumentParser(description='OSM to wpt data convertor.')
+	parser.add_argument('-v', '--version', action='version', version='%(prog)s 0.1a')
+	parser.add_argument('infile', help='Input file')
+	parser.add_argument('-o', help='Output file')
+	parser.add_argument('-f', action='append', nargs = 2, help='filter tag: -f amenity fuel [-f amenity parking]')
+	args = parser.parse_args()
 
-	args = sys.argv[ 1: ]
+	counter = 1												# счетчик строк wpt-файла
+	out_path = ''
+	in_path = args.infile									# извлекаем имя входного файла из командной строки
 
-	if len( args ) != 2:
-		usage()
+	if in_path.find('.') == -1:
+		in_path += '.shp'									# добисываем расширение, если его нет
+	
+	base_filename = os.path.splitext(os.path.basename(in_path))[0]
 
-	inPath = os.path.normpath(args[ 0 ])
-	outPath = os.path.normpath(args[ 1 ])
+	if args.o != None:
+		out_path = args.o									# извлекаем имя выходного файла из командной строки, если оно было указано
+	else:
+		out_path = os.path.join( os.path.dirname(in_path), base_filename + '.wpt' )	# иначе располагаем его рядом с входными данными
 
-	ogrData = ogr.Open( inPath, False )
-	f = open( outPath, 'w' )
+	if check_input_files(in_path, base_filename):			# проверяем доступны ли все нужные файлы
+		sys.exit( 1 )
 
-	# проверяем все ли в порядке
-	if ogrData is None:
-		print "ERROR: open failed"
+	ogrData = ogr.Open( in_path, False )
+	f = open( out_path, 'w' )
+
+	if ogrData is None:										# проверяем все ли в порядке
+		print "ERROR: open : [" + in_path + "] failed"
 		sys.exit( 1 )
 
 	print "Number of layers", ogrData.GetLayerCount()
@@ -140,28 +160,17 @@ if __name__ == '__main__':
 	
 	layer.ResetReading()
 
-#	fieldName = 'HIGHWAY'
-#	fieldValue = 'BUS_STOP'
+	query = ''
 
-	fieldName2 = 'AMENITY'
-	fieldValue2 = 'parking'
+	if args.f != None:										# извлекаем фильтры из командной строки
+		for item in args.f:
+			query += item[0] + '=' + item[1] + ' OR '
 
-	fieldName3 = 'AMENITY'
-	fieldValue3 = 'fuel'
+	query = query[:len(query)-4]
+	print "Query :" + query
 
-	#params = ['HIGHWAY', 'BUS_STOP'], ['AMENITY, parking'], ['AMENITY, fuel']]
-
-#	query = fieldName + '=' + fieldValue + ' or ' + fieldName2 + '=' + fieldValue2 + ' or ' + fieldName3 + '=' + fieldValue3
-	query = fieldName2 + '=' + fieldValue2 + ' or ' + fieldName3 + '=' + fieldValue3
-
-	"""query1 = 'HIGHWAY != BUS_STOP'
-	query2 = 'HIGHWAY != street_lamp'
-
-	query = query1 + ' and ' + query2"""
-
-#	query = fieldName4 + ' = ' + fieldValue4
-
-#	layer.SetAttributeFilter( query )
+	if len(query) > 0:
+		layer.SetAttributeFilter( query )
 
 	# начинаем просматривать объекты в исходном слое
 	inFeat = layer.GetNextFeature()
@@ -243,9 +252,6 @@ if __name__ == '__main__':
 	print ('total_pocessed: %d' % (total_pocessed))
 	print ('poi_converted: %d, (passed: %d, type_notfound: %d)' % (poi_converted, poi_passed, type_notfound))
 	print ('poi_skipped: %d, (ignored: %d)' % (poi_skipped, poi_ignored))
-	#print ('poi_ignored: %d' % ( poi_ignored))
-	#print ('poi_passed: %d' % (poi_passed))
-	#print ('type_notfound: %d' % (type_notfound))
 	print ('not_found_list size: %d' % (len(not_found_list)))
 	for item in not_found_list:
 	#	print item.name + ' [' + item.count + ']'
